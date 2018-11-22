@@ -1616,6 +1616,54 @@ static void on_alpha_screen_changed(GtkWindow *window, GdkScreen *, void *) {
     gtk_widget_set_visual(GTK_WIDGET(window), visual);
 }
 
+static gboolean set_geometry(GtkWindow *window, char* geometry) {
+    int w = -1, h = -1, x = -1, y = -1;
+    size_t last_split = -1;
+    size_t l = strlen(geometry) + 1;
+    for (size_t i = 0; i < l; i++) {
+        switch (geometry[i]) {
+            case 'x' :
+                geometry[i] = '\0';
+                if (w < 0) {
+                    w = atoi(geometry + last_split + 1);
+                } else {
+                    return false;
+                }
+                last_split = i;
+                break;
+            case '+' :
+                geometry[i] = '\0';
+                if (h < 0) {
+                    h = atoi(geometry + last_split + 1);
+                } else if (x < 0){
+                    x = atoi(geometry + last_split + 1);
+                } else {
+                    return false;
+                }
+                last_split = i;
+                break;
+            case '\0' :
+                // handle last token
+                if (h < 0) {
+                    h = atoi(geometry + last_split + 1);
+                } else if (y < 0) {
+                    y = atoi(geometry + last_split + 1);
+                }
+                break;
+        }
+    }
+
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+
+    gtk_window_set_default_size(GTK_WINDOW(window), w, h);
+    if (x >= 0 && y >= 0) {
+        gtk_window_move(GTK_WINDOW(window), x, y);
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
     GError *error = nullptr;
     const char *const term = "xterm-termite";
@@ -1623,7 +1671,7 @@ int main(int argc, char **argv) {
     gboolean version = FALSE, hold = FALSE;
 
     GOptionContext *context = g_option_context_new(nullptr);
-    char *role = nullptr, *execute = nullptr, *config_file = nullptr;
+    char *role = nullptr, *geometry = nullptr, *execute = nullptr, *config_file = nullptr;
     char *title = nullptr, *icon = nullptr;
     bool show_scrollbar = false;
     const GOptionEntry entries[] = {
@@ -1632,6 +1680,7 @@ int main(int argc, char **argv) {
         {"role", 'r', 0, G_OPTION_ARG_STRING, &role, "The role to use", "ROLE"},
         {"title", 't', 0, G_OPTION_ARG_STRING, &title, "Window title", "TITLE"},
         {"directory", 'd', 0, G_OPTION_ARG_STRING, &directory, "Change to directory", "DIRECTORY"},
+        {"geometry", 0, 0, G_OPTION_ARG_STRING, &geometry, "Window geometry", "GEOMETRY"},
         {"hold", 0, 0, G_OPTION_ARG_NONE, &hold, "Remain open after child process exits", nullptr},
         {"config", 'c', 0, G_OPTION_ARG_STRING, &config_file, "Path of config file", "CONFIG"},
         {"icon", 'i', 0, G_OPTION_ARG_STRING, &icon, "Icon", "ICON"},
@@ -1775,6 +1824,15 @@ int main(int argc, char **argv) {
         } else {
             window_title_cb(vte, &info.config.dynamic_title);
         }
+    }
+
+    if (geometry) {
+        gtk_widget_show_all(panel_overlay);
+        gtk_widget_show_all(info.panel.entry);
+        if (!set_geometry(GTK_WINDOW(window), geometry)) {
+            g_printerr("invalid geometry string: %s\n", geometry);
+        }
+        g_free(geometry);
     }
 
     if (icon) {
