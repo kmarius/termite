@@ -161,9 +161,9 @@ static void overlay_show(search_panel_info *info, overlay_mode mode, VteTerminal
 static void get_vte_padding(VteTerminal *vte, int *left, int *top, int *right, int *bottom);
 static char *check_match(VteTerminal *vte, GdkEventButton *event);
 static void load_config(GtkWindow *window, VteTerminal *vte, GtkWidget *scrollbar, GtkWidget *hbox,
-                        config_info *info, char **icon, bool *show_scrollbar);
+                        config_info *info, char **geometry, char **icon, bool *show_scrollbar);
 static void set_config(GtkWindow *window, VteTerminal *vte, GtkWidget *scrollbar, GtkWidget *hbox,
-                       config_info *info, char **icon, bool *show_scrollbar,
+                       config_info *info, char **geometry, char **icon, bool *show_scrollbar,
                        GKeyFile *config);
 static long first_row(VteTerminal *vte);
 
@@ -1418,7 +1418,7 @@ static void load_theme(GtkWindow *window, VteTerminal *vte, GKeyFile *config, hi
 }
 
 static void load_config(GtkWindow *window, VteTerminal *vte, GtkWidget *scrollbar,
-                        GtkWidget *hbox, config_info *info, char **icon,
+                        GtkWidget *hbox, config_info *info, char **geometry, char **icon,
                         bool *show_scrollbar) {
     const std::string default_path = "/termite/config";
     GKeyFile *config = g_key_file_new();
@@ -1454,14 +1454,19 @@ static void load_config(GtkWindow *window, VteTerminal *vte, GtkWidget *scrollba
     }
 
     if (loaded) {
-        set_config(window, vte, scrollbar, hbox, info, icon, show_scrollbar, config);
+        set_config(window, vte, scrollbar, hbox, info, geometry, icon, show_scrollbar, config);
     }
     g_key_file_free(config);
 }
 
 static void set_config(GtkWindow *window, VteTerminal *vte, GtkWidget *scrollbar, GtkWidget *hbox,
-                       config_info *info, char **icon, bool *show_scrollbar_ptr,
+                       config_info *info, char **geometry, char **icon, bool *show_scrollbar_ptr,
                        GKeyFile *config) {
+    if (geometry) {
+        if (auto s = get_config_string(config, "options", "geometry")) {
+            *geometry = *s;
+        }
+    }
 
     auto cfg_bool = [config](const char *key, gboolean value) {
         return get_config<gboolean>(g_key_file_get_boolean,
@@ -1616,49 +1621,74 @@ static void on_alpha_screen_changed(GtkWindow *window, GdkScreen *, void *) {
     gtk_widget_set_visual(GTK_WIDGET(window), visual);
 }
 
-static gboolean set_geometry(GtkWindow *window, char* geometry) {
-    int w = -1, h = -1, x = -1, y = -1;
-    size_t last_split = -1;
-    size_t l = strlen(geometry) + 1;
-    for (size_t i = 0; i < l; i++) {
-        switch (geometry[i]) {
+static gboolean parse_geometry(char* geometry, int *w, int *h, int *x, int *y) {
+    int ww = -1, hh = -1, xx = -1, yy = -1;
+    char* last_split = geometry;
+
+    /* 'split' the string (by inserting \0) and use atoi to get the integers */
+    while (*geometry) {
+        switch (*geometry) {
             case 'x' :
-                geometry[i] = '\0';
-                if (w < 0) {
-                    w = atoi(geometry + last_split + 1);
+                /* inside window geometry string */
+                *geometry = '\0';
+                if (ww < 0) {
+                    /* first token */
+                    ww = atoi(last_split);
                 } else {
+                    /* received x but the width is not set yet - error */
                     return false;
                 }
-                last_split = i;
+                last_split = geometry + 1;
                 break;
             case '+' :
-                geometry[i] = '\0';
-                if (h < 0) {
-                    h = atoi(geometry + last_split + 1);
-                } else if (x < 0){
-                    x = atoi(geometry + last_split + 1);
+                /* start or inside of position string */
+                *geometry = '\0';
+                if (hh < 0) {
+                    /* first '+' reached, set height to last num */
+                    hh = atoi(last_split);
+                } else if (xx < 0){
+                    /* second '+' reached. */
+                    xx = atoi(last_split);
                 } else {
                     return false;
                 }
-                last_split = i;
-                break;
-            case '\0' :
-                // handle last token
-                if (h < 0) {
-                    h = atoi(geometry + last_split + 1);
-                } else if (y < 0) {
-                    y = atoi(geometry + last_split + 1);
-                }
+                last_split = geometry + 1;
                 break;
         }
+        geometry++;
     }
+    /* handle last token */
+    if (hh < 0) {
+        /* height not set yet, this has to be it. no position in geometry string */
+        hh = atoi(last_split);
+    } else if (yy < 0) {
+        /* height already set, this has to be y-position */
+        yy = atoi(last_split);
+    } else {
+        /* unrecognized token */
+        return false;
+    }
+    *w = ww; *h = hh; *x = xx; *y = yy;
+    return true;
+}
+
+static gboolean set_geometry(GtkWindow *window, char* geometry) {
+    int w, h, x, y;
+
+    if (! parse_geometry(geometry, &w, &h, &x, &y)) {
+        return false;
+    }
+
+    // printf("%d, %d, %d, %d\n", w, h, x, y);
 
     if (w <= 0 || h <= 0) {
         return false;
     }
 
     gtk_window_set_default_size(GTK_WINDOW(window), w, h);
+
     if (x >= 0 && y >= 0) {
+        /* for some reason calling this function with 0,0 does not do anything */
         gtk_window_move(GTK_WINDOW(window), x, y);
     }
     return true;
@@ -1680,7 +1710,7 @@ int main(int argc, char **argv) {
         {"role", 'r', 0, G_OPTION_ARG_STRING, &role, "The role to use", "ROLE"},
         {"title", 't', 0, G_OPTION_ARG_STRING, &title, "Window title", "TITLE"},
         {"directory", 'd', 0, G_OPTION_ARG_STRING, &directory, "Change to directory", "DIRECTORY"},
-        {"geometry", 0, 0, G_OPTION_ARG_STRING, &geometry, "Window geometry", "GEOMETRY"},
+        {"geometry", 'g', 0, G_OPTION_ARG_STRING, &geometry, "Window geometry", "GEOMETRY"},
         {"hold", 0, 0, G_OPTION_ARG_NONE, &hold, "Remain open after child process exits", nullptr},
         {"config", 'c', 0, G_OPTION_ARG_STRING, &config_file, "Path of config file", "CONFIG"},
         {"icon", 'i', 0, G_OPTION_ARG_STRING, &icon, "Icon", "ICON"},
@@ -1749,22 +1779,22 @@ int main(int argc, char **argv) {
     keybind_info info {
         GTK_WINDOW(window), vte,
         {gtk_entry_new(),
-         gtk_drawing_area_new(),
-         overlay_mode::hidden,
-         std::vector<url_data>(),
-         nullptr},
+        gtk_drawing_area_new(),
+        overlay_mode::hidden,
+        std::vector<url_data>(),
+        nullptr},
         {vi_mode::insert, 0, 0, 0, 0},
         {{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0},
-         nullptr, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, -1, config_file, 0},
+        nullptr, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, -1, config_file, 0},
         gtk_window_fullscreen
     };
 
     load_config(GTK_WINDOW(window), vte, scrollbar, hbox, &info.config,
-                icon ? nullptr : &icon, &show_scrollbar);
+                geometry ? nullptr : &geometry, icon ? nullptr : &icon, &show_scrollbar);
 
     reload_config = [&]{
         load_config(GTK_WINDOW(window), vte, scrollbar, hbox, &info.config,
-                    nullptr, nullptr);
+                    nullptr, nullptr, nullptr);
     };
     signal(SIGUSR1, [](int){ reload_config(); });
 
@@ -1830,6 +1860,7 @@ int main(int argc, char **argv) {
         gtk_widget_show_all(panel_overlay);
         gtk_widget_show_all(info.panel.entry);
         if (!set_geometry(GTK_WINDOW(window), geometry)) {
+            /* doesn't work because i butchered the geometry string */
             g_printerr("invalid geometry string: %s\n", geometry);
         }
         g_free(geometry);
