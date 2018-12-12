@@ -1779,13 +1779,13 @@ int main(int argc, char **argv) {
     keybind_info info {
         GTK_WINDOW(window), vte,
         {gtk_entry_new(),
-        gtk_drawing_area_new(),
-        overlay_mode::hidden,
-        std::vector<url_data>(),
-        nullptr},
+         gtk_drawing_area_new(),
+         overlay_mode::hidden,
+         std::vector<url_data>(),
+         nullptr},
         {vi_mode::insert, 0, 0, 0, 0},
         {{nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0},
-        nullptr, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, -1, config_file, 0},
+         nullptr, FALSE, FALSE, FALSE, FALSE, TRUE, FALSE, FALSE, -1, config_file, 0},
         gtk_window_fullscreen
     };
 
