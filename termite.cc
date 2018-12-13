@@ -1621,65 +1621,139 @@ static void on_alpha_screen_changed(GtkWindow *window, GdkScreen *, void *) {
     gtk_widget_set_visual(GTK_WIDGET(window), visual);
 }
 
-static gboolean parse_geometry(char* geometry, int *w, int *h, int *x, int *y) {
-    int ww = -1, hh = -1, xx = -1, yy = -1;
-    char* last_split = geometry;
+static int
+read_int (gchar   *string,
+          gchar  **next)
+{
+  int result = 0;
+  int sign = 1;
 
-    /* 'split' the string (by inserting \0) and use atoi to get the integers */
-    while (*geometry) {
-        switch (*geometry) {
-            case 'x' :
-                /* inside window geometry string */
-                *geometry = '\0';
-                if (ww < 0) {
-                    /* first token */
-                    ww = atoi(last_split);
-                } else {
-                    /* received x but the width is not set yet - error */
-                    return false;
-                }
-                last_split = geometry + 1;
-                break;
-            case '+' :
-                /* start or inside of position string */
-                *geometry = '\0';
-                if (hh < 0) {
-                    /* first '+' reached, set height to last num */
-                    hh = atoi(last_split);
-                } else if (xx < 0){
-                    /* second '+' reached. */
-                    xx = atoi(last_split);
-                } else {
-                    return false;
-                }
-                last_split = geometry + 1;
-                break;
+  if (*string == '+')
+    string++;
+  else if (*string == '-')
+    {
+      string++;
+      sign = -1;
+    }
+  for (; (*string >= '0') && (*string <= '9'); string++)
+    {
+      result = (result * 10) + (*string - '0');
+    }
+  *next = string;
+  if (sign >= 0)
+    return (result);
+  else
+    return (-result);
+}
+/*
+ * Bitmask returned by XParseGeometry().  Each bit tells if the corresponding
+ * value (x, y, width, height) was found in the parsed string.
+ */
+#define NoValue         0x0000
+#define XValue          0x0001
+#define YValue          0x0002
+#define WidthValue      0x0004
+#define HeightValue     0x0008
+#define AllValues       0x000F
+#define XNegative       0x0010
+#define YNegative       0x0020
+/* Try not to reformat/modify, so we can compare/sync with X sources */
+static int
+gtk_XParseGeometry (const char   *string,
+                    int          *x,
+                    int          *y,
+                    unsigned int *width,
+                    unsigned int *height)
+{
+  int mask = NoValue;
+  char *strind;
+  unsigned int tempWidth, tempHeight;
+  int tempX, tempY;
+  char *nextCharacter;
+  /* These initializations are just to silence gcc */
+  tempWidth = 0;
+  tempHeight = 0;
+  tempX = 0;
+  tempY = 0;
+
+  if ( (string == NULL) || (*string == '\0')) return(mask);
+  if (*string == '=')
+    string++;  /* ignore possible '=' at beg of geometry spec */
+  strind = (char *)string;
+  if (*strind != '+' && *strind != '-' && *strind != 'x') {
+    tempWidth = read_int(strind, &nextCharacter);
+    if (strind == nextCharacter)
+      return (0);
+    strind = nextCharacter;
+    mask |= WidthValue;
+  }
+  if (*strind == 'x' || *strind == 'X') {
+    strind++;
+    tempHeight = read_int(strind, &nextCharacter);
+    if (strind == nextCharacter)
+      return (0);
+    strind = nextCharacter;
+    mask |= HeightValue;
+  }
+  if ((*strind == '+') || (*strind == '-')) {
+    if (*strind == '-') {
+      strind++;
+      tempX = -read_int(strind, &nextCharacter);
+      if (strind == nextCharacter)
+        return (0);
+      strind = nextCharacter;
+      mask |= XNegative;
+    }
+    else
+      {        strind++;
+      tempX = read_int(strind, &nextCharacter);
+      if (strind == nextCharacter)
+        return(0);
+      strind = nextCharacter;
+      }
+    mask |= XValue;
+    if ((*strind == '+') || (*strind == '-')) {
+      if (*strind == '-') {
+        strind++;
+        tempY = -read_int(strind, &nextCharacter);
+        if (strind == nextCharacter)
+          return(0);
+        strind = nextCharacter;
+        mask |= YNegative;
+      }
+      else
+        {
+          strind++;
+          tempY = read_int(strind, &nextCharacter);
+          if (strind == nextCharacter)
+            return(0);
+          strind = nextCharacter;
         }
-        geometry++;
+      mask |= YValue;
     }
-    /* handle last token */
-    if (hh < 0) {
-        /* height not set yet, this has to be it. no position in geometry string */
-        hh = atoi(last_split);
-    } else if (yy < 0) {
-        /* height already set, this has to be y-position */
-        yy = atoi(last_split);
-    } else {
-        /* unrecognized token */
-        return false;
-    }
-    *w = ww; *h = hh; *x = xx; *y = yy;
-    return true;
+  }
+
+  /* If strind isn't at the end of the string the it's an invalid
+                geometry specification. */
+  if (*strind != '\0') return (0);
+  if (mask & XValue)
+    *x = tempX;
+  if (mask & YValue)
+    *y = tempY;
+  if (mask & WidthValue)
+    *width = tempWidth;
+  if (mask & HeightValue)
+    *height = tempHeight;
+  return (mask);
 }
 
 static gboolean set_geometry(GtkWindow *window, char* geometry) {
-    int w, h, x, y;
+    unsigned int w = -1, h = -1;
+    int x = -1, y = -1;
 
-    if (! parse_geometry(geometry, &w, &h, &x, &y)) {
+    if (! gtk_XParseGeometry(geometry, &x, &y, &w, &h)) {
         return false;
     }
-
-    // printf("%d, %d, %d, %d\n", w, h, x, y);
 
     if (w <= 0 || h <= 0) {
         return false;
